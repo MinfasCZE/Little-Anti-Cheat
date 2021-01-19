@@ -47,7 +47,6 @@
 #define CHEAT_AIMBOT 		5
 #define CHEAT_AIMLOCK 		6
 #define CHEAT_ANTI_DUCK_DELAY 	7
-#define CHEAT_NOISEMAKER_SPAM 	8
 #define CHEAT_MAX 		9
 
 #define CVAR_ENABLE 			0
@@ -71,7 +70,6 @@
 #define CVAR_AIMLOCK 			18
 #define CVAR_AIMLOCK_LIGHT 		19
 #define CVAR_ANTI_DUCK_DELAY 		20
-#define CVAR_NOISEMAKER_SPAM 		21
 #define CVAR_BACKTRACK_PATCH 		22
 #define CVAR_BACKTRACK_TOLERANCE 	23
 #define CVAR_MAX_PING			24
@@ -80,10 +78,6 @@
 #define CVAR_LOSS_FIX 			27
 #define CVAR_AUTO_UPDATE 		28
 #define CVAR_MAX 			29
-
-#define NOISEMAKER_TYPE_NONE 		0
-#define NOISEMAKER_TYPE_LIMITED 	1
-#define NOISEMAKER_TYPE_UNLIMITED 	2
 
 #define BHOP_SIMPLISTIC 	0
 #define BHOP_ADVANCED 		1
@@ -147,10 +141,6 @@ int playerinfo_aimlock_sus[MAXPLAYERS + 1];
 int playerinfo_aimlock[MAXPLAYERS + 1];
 int playerinfo_aimbot[MAXPLAYERS + 1];
 int playerinfo_bhop[MAXPLAYERS + 1];
-int playerinfo_noisemaker_type[MAXPLAYERS + 1];
-int playerinfo_noisemaker_ent[MAXPLAYERS + 1];
-int playerinfo_noisemaker_ent_prev[MAXPLAYERS + 1];
-int playerinfo_noisemaker_detection[MAXPLAYERS + 1];
 float playerinfo_time_teleported[MAXPLAYERS + 1];
 float playerinfo_time_aimlock[MAXPLAYERS + 1];
 float playerinfo_time_backtrack[MAXPLAYERS + 1];
@@ -178,7 +168,7 @@ char query_list[][] = {
 
 
 public Plugin:myinfo = {
-	name = "[Lilac] Little Anti-Cheat",
+	name = "Little Anti-Cheat",
 	author = "J_Tanzanite",
 	description = "An opensource Anti-Cheat.",
 	version = VERSION,
@@ -198,8 +188,6 @@ public void OnPluginStart()
 	if (StrEqual(gamefolder, "tf", false)) {
 		ggame = GAME_TF2;
 
-		HookEvent("post_inventory_application",
-			event_inventoryupdate, EventHookMode_Post);
 		HookEvent("player_teleported",
 			event_teleported, EventHookMode_Post);
 	}
@@ -314,9 +302,6 @@ public void OnPluginStart()
 	cvar[CVAR_ANTI_DUCK_DELAY] = CreateConVar("lilac_anti_duck_delay", "1",
 		"CS:GO Only, detect Anti-Duck-Delay/FastDuck.",
 		FCVAR_PROTECTED, true, 0.0, true, 1.0);
-	cvar[CVAR_NOISEMAKER_SPAM] = CreateConVar("lilac_noisemaker", "0",
-		"TF2 Only, detect infinite noisemaker spam. STILL IN BETA, DOES NOT BAN, ONLY LOGS! MAY HAVE SOME ISSUES!",
-		FCVAR_PROTECTED, true, 0.0, true, 1.0);
 	cvar[CVAR_BACKTRACK_PATCH] = CreateConVar("lilac_backtrack_patch", "0",
 		"Patch Backtrack.\n0 = Disabled (Recommended setting).\n1 = Randomized (Not recommended patch method).\n2 = Locked (Recommended patch method).",
 		FCVAR_PROTECTED, true, 0.0, true, 2.0);
@@ -368,11 +353,9 @@ public void OnPluginStart()
 	// If sv_maxupdaterate is changed mid-game and then this plugin
 	// 	is loaded, then it could lead to false positives.
 	// Reset all stats on all players already in-game, but ignore lerp.
-	// Also check players already in-game for noisemaker.
 	for (int i = 1; i <= MaxClients; i++) {
 		lilac_reset_client(i);
 		playerinfo_ignore_lerp[i] = true;
-		check_inventory_for_noisemaker(i);
 	}
 
 	RegServerCmd("lilac_date_list", lilac_date_list,
@@ -497,7 +480,6 @@ public Action lilac_set_ban_length(int args)
 		PrintToServer("\tlilac_set_ban_length aimbot <minutes>");
 		PrintToServer("\tlilac_set_ban_length aimlock <minutes>");
 		PrintToServer("\tlilac_set_ban_length antiduckdelay <minutes>");
-		PrintToServer("\tlilac_set_ban_length noisemaker <minutes>\n");
 
 		return Plugin_Handled;
 	}
@@ -530,9 +512,6 @@ public Action lilac_set_ban_length(int args)
 		|| StrEqual(feature, "antiduck", false) || StrEqual(feature, "antiduckdelay", false)
 		|| StrEqual(feature, "fastduck", false)) {
 		index = CHEAT_ANTI_DUCK_DELAY;
-	}
-	else if (StrEqual(feature, "noisemaker", false) || StrEqual(feature, "noise", false)) {
-		index = CHEAT_NOISEMAKER_SPAM;
 	}
 	else {
 		PrintToServer("Error: Unknown cheat feature \"%s\"", feature);
@@ -691,9 +670,6 @@ public void cvar_change(ConVar convar, const char[] oldValue,
 	else if (view_as<Handle>(convar) == cvar[CVAR_ANTI_DUCK_DELAY]) {
 		icvar[CVAR_ANTI_DUCK_DELAY] = StringToInt(newValue, 10);
 	}
-	else if (view_as<Handle>(convar) == cvar[CVAR_NOISEMAKER_SPAM]) {
-		icvar[CVAR_NOISEMAKER_SPAM] = StringToInt(newValue, 10);
-	}
 	else if (view_as<Handle>(convar) == cvar[CVAR_BACKTRACK_PATCH]) {
 		icvar[CVAR_BACKTRACK_PATCH] = StringToInt(newValue, 10);
 
@@ -797,10 +773,6 @@ void lilac_reset_client(int client)
 	playerinfo_aimlock[client] = 0;
 	playerinfo_aimbot[client] = 0;
 	playerinfo_bhop[client] = 0;
-	playerinfo_noisemaker_type[client] = NOISEMAKER_TYPE_NONE;
-	playerinfo_noisemaker_ent[client] = 0;
-	playerinfo_noisemaker_ent_prev[client] = 0;
-	playerinfo_noisemaker_detection[client] = 0;
 	playerinfo_time_teleported[client] = 0.0;
 	playerinfo_time_aimlock[client] = 0.0;
 	playerinfo_time_backtrack[client] = 0.0;
@@ -824,48 +796,6 @@ public void TF2_OnConditionRemoved(int client, TFCond condition)
 {
 	if (condition == TFCond_Taunting)
 		playerinfo_time_teleported[client] = GetGameTime();
-}
-
-public Action event_inventoryupdate(Event event, const char[] name, bool dontBroadcast)
-{
-	int client;
-
-	client = GetClientOfUserId(GetEventInt(event, "userid", 0));
-	check_inventory_for_noisemaker(client);
-}
-
-void check_inventory_for_noisemaker(int client)
-{
-	char classname[32];
-	int type;
-
-	if (!is_player_valid(client))
-		return;
-
-	playerinfo_noisemaker_type[client] = NOISEMAKER_TYPE_NONE;
-	playerinfo_noisemaker_ent_prev[client] = playerinfo_noisemaker_ent[client];
-	playerinfo_noisemaker_ent[client] = 0;
-
-	for (int i = MaxClients + 1; i < GetEntityCount(); i++) {
-		if (!IsValidEdict(i))
-			continue;
-
-		if (GetEntPropEnt(i, Prop_Data, "m_hOwnerEntity") != client)
-			continue;
-
-		GetEntityClassname(i, classname, sizeof(classname));
-
-		if (!StrEqual(classname, "tf_wearable", false))
-			continue;
-
-		type = get_entity_noisemaker_type(GetEntProp(i, Prop_Send, "m_iItemDefinitionIndex"));
-
-		if (type) {
-			playerinfo_noisemaker_type[client] = type;
-			playerinfo_noisemaker_ent[client] = i;
-			return;
-		}
-	}
 }
 
 public Action event_teleported(Event event, const char[] name,
@@ -1501,37 +1431,6 @@ public Action timer_check_aimbot(Handle timer, DataPack pack)
 		lilac_detected_aimbot(client, delta, total_delta, detected);
 }
 
-public Action OnClientCommandKeyValues(int client, KeyValues kv)
-{
-	char command[64];
-	KvGetSectionName(kv, command, sizeof(command));
-
-	if (ggame != GAME_TF2)
-		return Plugin_Continue;
-
-	if (!icvar[CVAR_ENABLE] || !icvar[CVAR_NOISEMAKER_SPAM])
-		return Plugin_Continue;
-
-	if (playerinfo_noisemaker_type[client] != NOISEMAKER_TYPE_LIMITED)
-		return Plugin_Continue;
-
-	if (playerinfo_noisemaker_ent_prev[client] != playerinfo_noisemaker_ent[client]) {
-		playerinfo_noisemaker_ent_prev[client] = playerinfo_noisemaker_ent[client];
-		playerinfo_noisemaker_detection[client] = 0;
-	}
-
-	if (StrEqual(command, "+use_action_slot_item_server", false)
-		|| StrEqual(command, "-use_action_slot_item_server", false)) {
-
-		// Since this reacts to both + and -, and the maximum is 25 uses per noisemaker,
-		// 	detect the double of that + a buffer of 10.
-		if (++playerinfo_noisemaker_detection[client] > 60)
-			lilac_detected_noisemaker(client);
-	}
-
-	return Plugin_Continue;
-}
-
 public Action OnPlayerRunCmd(int client, int& buttons, int& impulse,
 				float vel[3], float angles[3], int& weapon,
 				int& subtype, int& cmdnum, int& tickcount,
@@ -1736,32 +1635,6 @@ bool bullettime_can_shoot(int client)
 		return true;
 
 	return false;
-}
-
-void lilac_detected_noisemaker(int client)
-{
-	if (playerinfo_banned_flags[client][CHEAT_NOISEMAKER_SPAM])
-		return;
-
-	if (lilac_forward_allow_cheat_detection(client, CHEAT_NOISEMAKER_SPAM) == false)
-		return;
-
-	playerinfo_banned_flags[client][CHEAT_NOISEMAKER_SPAM] = true;
-
-	lilac_forward_client_cheat(client, CHEAT_NOISEMAKER_SPAM);
-
-	if (icvar[CVAR_LOG]) {
-		lilac_log_setup_client(client);
-		Format(line, sizeof(line), "%s is suspected of using unlimited noisemaker cheats.", line);
-
-		lilac_log(true);
-
-		if (icvar[CVAR_LOG_EXTRA])
-			lilac_log_extra(client);
-	}
-
-	// Enable this later if no false positives are reported.
-	// lilac_ban_client(client, CHEAT_NOISEMAKER_SPAM);
 }
 
 void lilac_detected_anti_duck_delay(int client)
@@ -2219,24 +2092,22 @@ void lilac_ban_client(int client, int cheat)
 
 	switch (cheat) {
 	case CHEAT_ANGLES: { Format(reason, sizeof(reason),
-		"[Little Anti-Cheat %s] %T", VERSION, "ban_angle", client); }
+		"[LAC %s] %T", VERSION, "ban_angle", client); }
 	case CHEAT_CHATCLEAR: { Format(reason, sizeof(reason),
-		"[Little Anti-Cheat %s] %T", VERSION, "ban_chat_clear", client); }
+		"[LAC %s] %T", VERSION, "ban_chat_clear", client); }
 	case CHEAT_CONVAR: { Format(reason, sizeof(reason),
-		"[Little Anti-Cheat %s] %T", VERSION, "ban_convar", client); }
+		"[LAC %s] %T", VERSION, "ban_convar", client); }
 	// It saying "convar violation" for nolerp is intentional.
 	case CHEAT_NOLERP: { Format(reason, sizeof(reason),
-		"[Little Anti-Cheat %s] %T", VERSION, "ban_convar", client); }
+		"[LAC %s] %T", VERSION, "ban_convar", client); }
 	case CHEAT_BHOP: { Format(reason, sizeof(reason),
-		"[Little Anti-Cheat %s] %T", VERSION, "ban_bhop", client); }
+		"[LAC %s] %T", VERSION, "ban_bhop", client); }
 	case CHEAT_AIMBOT: { Format(reason, sizeof(reason),
-		"[Little Anti-Cheat %s] %T", VERSION, "ban_aimbot", client); }
+		"[LAC %s] %T", VERSION, "ban_aimbot", client); }
 	case CHEAT_AIMLOCK: { Format(reason, sizeof(reason),
-		"[Little Anti-Cheat %s] %T", VERSION, "ban_aimlock", client); }
+		"[LAC %s] %T", VERSION, "ban_aimlock", client); }
 	case CHEAT_ANTI_DUCK_DELAY: { Format(reason, sizeof(reason),
-		"[Little Anti-Cheat %s] %T", VERSION, "ban_anti_duck_delay", client); }
-	case CHEAT_NOISEMAKER_SPAM: { Format(reason, sizeof(reason),
-		"[Little Anti-Cheat %s] %T", VERSION, "ban_noisemaker", client); }
+		"[LAC %s] %T", VERSION, "ban_anti_duck_delay", client); }
 	default: return;
 	}
 
@@ -2263,29 +2134,6 @@ void lilac_ban_client(int client, int cheat)
 
 	BanClient(client, get_ban_length(cheat), BANFLAG_AUTO, reason, reason, "lilac", 0);
 	CreateTimer(5.0, timer_kick, GetClientUserId(client));
-}
-
-int get_entity_noisemaker_type(int itemindex)
-{
-	switch (itemindex) {
-	case 280: return NOISEMAKER_TYPE_LIMITED; // Black cat.
-	case 281: return NOISEMAKER_TYPE_LIMITED; // Gremlin.
-	case 282: return NOISEMAKER_TYPE_LIMITED; // Werewolf.
-	case 283: return NOISEMAKER_TYPE_LIMITED; // Witch.
-	case 284: return NOISEMAKER_TYPE_LIMITED; // Banshee.
-	case 286: return NOISEMAKER_TYPE_LIMITED; // Crazy Laugh.
-	case 288: return NOISEMAKER_TYPE_LIMITED; // Stabby.
-	case 362: return NOISEMAKER_TYPE_LIMITED; // Bell.
-	case 364: return NOISEMAKER_TYPE_LIMITED; // Gong.
-	case 365: return NOISEMAKER_TYPE_LIMITED; // Koto.
-	case 493: return NOISEMAKER_TYPE_LIMITED; // Fireworks.
-	case 542: return NOISEMAKER_TYPE_LIMITED; // Vuvuzela.
-
-	case 536: return NOISEMAKER_TYPE_UNLIMITED; // Birthday.
-	case 673: return NOISEMAKER_TYPE_UNLIMITED; // Winter 2011.
-	}
-
-	return NOISEMAKER_TYPE_NONE;
 }
 
 public Action timer_kick(Handle timer, int userid)
